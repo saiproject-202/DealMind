@@ -1,0 +1,16 @@
+packages:
+  - "apps/*"
+  - "services/*"
+  - "packages/*"
+
+allowBuilds:
+  "@prisma/client": true
+  "@prisma/engines": true
+  "@sentry/cli": true
+  bufferutil: true
+  es5-ext: true
+  esbuild: true
+  prisma: true
+  sharp: true
+  unrs-resolver: true
+  utf-8-validate: true

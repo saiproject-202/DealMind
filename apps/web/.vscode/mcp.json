@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "Sentry": {
+      "url": "https://mcp.sentry.dev/mcp/dealmind/dealmind-web",
+      "type": "http"
+    }
+  }
+}

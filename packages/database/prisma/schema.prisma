@@ -1,0 +1,610 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== USER DOMAIN ====================
+
+model User {
+  id                String   @id @default(uuid())
+  phone             String   @unique
+  displayName       String?  @map("display_name")
+  avatarUrl         String?  @map("avatar_url")
+  isVerified        Boolean  @default(false) @map("is_verified")
+  points            Int      @default(0)
+  trustScore        Decimal  @default(0) @map("trust_score") @db.Decimal(3, 2)
+  pendingTrustDelta Float    @default(0) @map("pending_trust_delta") // real-time signal since last weekly reconciliation — never authoritative on its own
+  levelId           String?  @map("level_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  savingsGenerated  Decimal  @default(0) @map("savings_generated")
+
+  level                ContributorLevel?      @relation(fields: [levelId], references: [id])
+  preferences          UserPreference?
+  cartnotes            CartNote[]
+  savedProducts        SavedProduct[]
+  searchHistory        SearchHistory[]
+  notifications        Notification[]
+  dealSubmissions      DealSubmission[]
+  deals                Deal[]                 @relation("SubmittedDeals")
+  pointsLog            ContributorPointsLog[]
+  userBadges           UserBadge[]
+  affiliateClicks      AffiliateClick[]
+  affiliateConversions AffiliateConversion[]
+  purchaseHistory      PurchaseHistory[]
+
+  coupons       Coupon[]
+  couponReports CouponReport[]
+  couponReveals CouponReveal[]
+
+  @@map("users")
+}
+
+model UserPreference {
+  id                String   @id @default(uuid())
+  userId            String   @unique @map("user_id")
+  categoryIds       String[] @map("category_ids")
+  brandPreferences  String[] @map("brand_preferences")
+  priceMin          Decimal? @map("price_min")
+  priceMax          Decimal? @map("price_max")
+  preferredStores   String[] @map("preferred_stores")
+  notificationPrefs Json?    @map("notification_prefs")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_preferences")
+}
+
+// ==================== PRODUCT DOMAIN ====================
+
+model Category {
+  id       String   @id @default(uuid())
+  name     String
+  parentId String?  @map("parent_id")
+  icon     String?
+  slug     String   @unique
+  // Which variant types apply to products in this category — e.g. Fashion:
+  // ["Color","Size"], Mobiles: ["Color","Storage","RAM"]. Drives which
+  // fields the admin form shows and which selectors the product page
+  // renders; empty means this category has no variants (default for all
+  // existing categories — fully backward compatible, no data migration).
+  variantTypes String[] @default([]) @map("variant_types")
+
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryTree")
+  products Product[]
+
+  @@map("categories")
+}
+
+model Store {
+  id               String  @id @default(uuid())
+  name             String
+  logoUrl          String? @map("logo_url")
+  baseUrl          String  @map("base_url")
+  affiliateNetwork String? @map("affiliate_network")
+  affiliateTag     String? @map("affiliate_tag")
+  isActive         Boolean @default(true) @map("is_active")
+
+  listings        ProductListing[]
+  affiliateClicks AffiliateClick[]
+  coupons         Coupon[]
+
+  @@map("stores")
+}
+
+model Product {
+  id             String   @id @default(uuid())
+  name           String
+  brand          String?
+  categoryId     String   @map("category_id")
+  images         String[]
+  description    String?
+  specifications Json?
+  aiSummary      String?  @map("ai_summary")
+  sourceType     String   @default("admin") @map("source_type")
+  status         String   @default("active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  category Category         @relation(fields: [categoryId], references: [id])
+  listings ProductListing[]
+  variants ProductVariant[]
+
+  @@map("products")
+}
+
+// A single (type, value) option for a product — e.g. ("Color","Blue") or
+// ("Storage","256GB"). A product with no rows here simply has no variants;
+// nothing about existing products needs to change for this table to exist.
+model ProductVariant {
+  id        String   @id @default(uuid())
+  productId String   @map("product_id")
+  type      String   // must match one of the product's Category.variantTypes
+  value     String
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, type, value])
+  @@map("product_variants")
+}
+
+model ProductListing {
+  id            String    @id @default(uuid())
+  productId     String    @map("product_id")
+  storeId       String    @map("store_id")
+  currentPrice  Decimal   @map("current_price")
+  originalPrice Decimal?  @map("original_price")
+  discountPct   Decimal?  @map("discount_pct")
+  couponCode    String?   @map("coupon_code")
+  storeUrl      String    @map("store_url")
+  affiliateUrl  String?   @map("affiliate_url")
+  rating        Decimal?  @db.Decimal(2, 1)
+  reviewCount   Int?      @map("review_count")
+  isAvailable   Boolean   @default(true) @map("is_available")
+  lastSyncedAt  DateTime? @map("last_synced_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  product              Product               @relation(fields: [productId], references: [id], onDelete: Cascade)
+  store                Store                 @relation(fields: [storeId], references: [id])
+  priceHistory         PriceHistory[]
+  deals                Deal[]
+  cartNoteMatches      CartNoteMatch[]
+  affiliateClicks      AffiliateClick[]
+  affiliateConversions AffiliateConversion[]
+  purchaseHistory      PurchaseHistory[]
+  savedBy              SavedProduct[]
+
+  @@unique([productId, storeId])
+  @@map("product_listings")
+}
+
+model PriceHistory {
+  id         String   @id @default(uuid())
+  listingId  String   @map("listing_id")
+  price      Decimal
+  recordedAt DateTime @default(now()) @map("recorded_at")
+
+  listing ProductListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@map("price_history")
+}
+
+// ==================== DEAL DOMAIN ====================
+
+model Deal {
+  id            String    @id @default(uuid())
+  listingId     String    @map("listing_id")
+  title         String
+  dealType      String    @map("deal_type")
+  sourceType    String    @default("admin") @map("source_type")
+  submittedBy   String?   @map("submitted_by")
+  status        String    @default("pending")
+  approvedBy    String?   @map("approved_by")
+  approvedAt    DateTime? @map("approved_at")
+  pointsAwarded Int?      @map("points_awarded")
+  expiresAt     DateTime? @map("expires_at")
+  clickCount    Int       @default(0) @map("click_count")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  listing         ProductListing   @relation(fields: [listingId], references: [id])
+  submitter       User?            @relation("SubmittedDeals", fields: [submittedBy], references: [id])
+  approver        AdminUser?       @relation(fields: [approvedBy], references: [id])
+  approvalQueue   ApprovalQueue?
+  affiliateClicks AffiliateClick[]
+
+  @@map("deals")
+}
+
+model DealSubmission {
+  id              String   @id @default(uuid())
+  userId          String   @map("user_id")
+  submissionType  String   @map("submission_type")
+  rawContent      String?  @map("raw_content")
+  mediaUrls       String[] @map("media_urls")
+  aiExtracted     Json?    @map("ai_extracted")
+  confidenceScore Decimal? @map("confidence_score") @db.Decimal(3, 2)
+  status          String   @default("pending")
+  dealId          String?  @map("deal_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("deal_submissions")
+}
+
+// ==================== TELEGRAM DOMAIN ====================
+
+model TelegramChannel {
+  id              String    @id @default(uuid())
+  channelUsername String    @map("channel_username")
+  channelId       BigInt?   @map("channel_id")
+  displayName     String?   @map("display_name")
+  isTrusted       Boolean   @default(false) @map("is_trusted")
+  isActive        Boolean   @default(true) @map("is_active")
+  addedBy         String?   @map("added_by")
+  lastSyncedAt    DateTime? @map("last_synced_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  // System-set (not the admin's own isTrusted toggle) when this channel's
+  // invalid-URL rate crosses the auto-pause threshold — null means auto-
+  // approval is enabled. Pausing this only stops auto-approval; posts keep
+  // importing, getting AI-analyzed, and queued for manual review regardless.
+  autoApproveDisabledReason String? @map("auto_approve_disabled_reason")
+  // Soft-delete — TelegramPost rows carry a required FK to this channel, so
+  // a hard delete fails (FK violation) for any channel with import history.
+  // "Removing" a channel just hides it; re-adding the same @username
+  // reactivates this same row (clearing deletedAt) so all its historical
+  // posts/stats stay attached instead of being orphaned or lost.
+  deletedAt    DateTime? @map("deleted_at")
+
+  posts        TelegramPost[]
+  addedByAdmin AdminUser?     @relation(fields: [addedBy], references: [id])
+
+  @@map("telegram_channels")
+}
+
+model TelegramPost {
+  id              String    @id @default(uuid())
+  channelId       String    @map("channel_id")
+  messageId       BigInt    @map("message_id")
+  rawText         String?   @map("raw_text")
+  mediaUrls       String[]  @map("media_urls")
+  aiExtracted     Json?     @map("ai_extracted")
+  confidenceScore Decimal?  @map("confidence_score") @db.Decimal(3, 2)
+  processStatus   String    @default("pending") @map("process_status")
+  dealId          String?   @map("deal_id")
+  postedAt        DateTime? @map("posted_at")
+  processedAt     DateTime? @map("processed_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  channel TelegramChannel @relation(fields: [channelId], references: [id])
+
+  @@unique([channelId, messageId])
+  @@map("telegram_posts")
+}
+
+// ==================== CARTNOTE DOMAIN ====================
+
+model CartNote {
+  id             String    @id @default(uuid())
+  userId         String    @map("user_id")
+  rawNote        String    @map("raw_note")
+  parsedRule     Json?     @map("parsed_rule")
+  mode           String    @default("alert")
+  status         String    @default("active")
+  matchCount     Int       @default(0) @map("match_count")
+  lastCheckedAt  DateTime? @map("last_checked_at")
+  expiresAt      DateTime? @map("expires_at")
+  expiryAnalysis String?   @map("expiry_analysis") @db.Text
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  matches CartNoteMatch[]
+
+  @@map("cartnotes")
+}
+
+model CartNoteMatch {
+  id           String   @id @default(uuid())
+  cartnoteId   String   @map("cartnote_id")
+  listingId    String   @map("listing_id")
+  matchedPrice Decimal  @map("matched_price")
+  matchReason  String?  @map("match_reason")
+  isNotified   Boolean  @default(false) @map("is_notified")
+  matchedAt    DateTime @default(now()) @map("matched_at")
+
+  cartnote CartNote       @relation(fields: [cartnoteId], references: [id], onDelete: Cascade)
+  listing  ProductListing @relation(fields: [listingId], references: [id])
+
+  @@map("cartnote_matches")
+}
+
+// ==================== GAMIFICATION DOMAIN ====================
+
+model ContributorLevel {
+  id          String  @id @default(uuid())
+  name        String
+  levelNumber Int     @unique @map("level_number")
+  minVerified Int     @default(0) @map("min_verified")
+  minAccuracy Float   @default(0) @map("min_accuracy")
+  perks       String?
+
+  users User[]
+
+  @@map("contributor_levels")
+}
+
+model Badge {
+  id          String  @id @default(uuid())
+  slug        String  @unique // "first_verified", "trusted_25", etc — code references this
+  name        String
+  description String?
+  icon        String  @default("🏆")
+
+  userBadges UserBadge[]
+  challenges Challenge[]
+
+  @@map("badges")
+}
+
+model UserBadge {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  badgeId   String   @map("badge_id")
+  awardedAt DateTime @default(now()) @map("awarded_at")
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  badge Badge @relation(fields: [badgeId], references: [id])
+
+  @@unique([userId, badgeId])
+  @@map("user_badges")
+}
+
+model ContributorPointsLog {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  amount    Int
+  reason    String
+  dealId    String?  @map("deal_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("contributor_points_log")
+}
+
+model Challenge {
+  id            String   @id @default(uuid())
+  title         String
+  description   String?
+  criteria      Json?
+  rewardBadgeId String?  @map("reward_badge_id")
+  rewardPoints  Int      @default(0) @map("reward_points")
+  startAt       DateTime @map("start_at")
+  endAt         DateTime @map("end_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  rewardBadge Badge? @relation(fields: [rewardBadgeId], references: [id])
+
+  @@map("challenges")
+}
+
+// ==================== AFFILIATE DOMAIN ====================
+
+model AffiliateClick {
+  id         String   @id @default(uuid())
+  listingId  String   @map("listing_id")
+  dealId     String?  @map("deal_id")
+  userId     String?  @map("user_id")
+  sessionId  String   @map("session_id")
+  storeId    String   @map("store_id")
+  sourcePage String?  @map("source_page")
+  clickedAt  DateTime @default(now()) @map("clicked_at")
+
+  listing    ProductListing        @relation(fields: [listingId], references: [id])
+  store      Store                 @relation(fields: [storeId], references: [id])
+  deal       Deal?                 @relation(fields: [dealId], references: [id])
+  user       User?                 @relation(fields: [userId], references: [id])
+  conversion AffiliateConversion[]
+
+  @@map("affiliate_clicks")
+}
+
+model AffiliateConversion {
+  id               String   @id @default(uuid())
+  clickId          String?  @unique @map("click_id")
+  listingId        String?  @map("listing_id")
+  userId           String?  @map("user_id")
+  couponId         String?  @map("coupon_id") // nullable — used later
+  orderId          String?  @map("order_id")
+  orderValue       Decimal  @map("order_value")
+  commissionAmount Decimal  @map("commission_amount")
+  status           String   @default("pending") // pending | confirmed | rejected
+  source           String   @default("earnkaro")
+  rawRow           Json?    @map("raw_row") // original CSV row for audit
+  importBatchId    String?  @map("import_batch_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  click   AffiliateClick? @relation(fields: [clickId], references: [id])
+  listing ProductListing? @relation(fields: [listingId], references: [id])
+  user    User?           @relation(fields: [userId], references: [id])
+
+  purchaseHistory PurchaseHistory[]
+
+  @@index([status, createdAt])
+  @@index([userId])
+  @@map("affiliate_conversions")
+}
+
+model PurchaseHistory {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  conversionId String   @map("conversion_id")
+  listingId    String?  @map("listing_id")
+  orderValue   Decimal  @map("order_value")
+  savings      Decimal  @default(0)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user             User                @relation(fields: [userId], references: [id])
+  conversion       AffiliateConversion @relation(fields: [conversionId], references: [id])
+  productListing   ProductListing?     @relation(fields: [productListingId], references: [id])
+  productListingId String?
+
+  @@index([userId, createdAt])
+  @@map("purchase_history")
+}
+
+// ==================== NOTIFICATION DOMAIN ====================
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  type      String
+  title     String
+  body      String
+  data      Json?
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+// ==================== ADMIN DOMAIN ====================
+
+model AdminUser {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  role         String    @default("moderator")
+  isActive     Boolean   @default(true) @map("is_active")
+  lastLoginAt  DateTime? @map("last_login_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  approvedDeals      Deal[]
+  approvalQueueItems ApprovalQueue[]
+  telegramChannels   TelegramChannel[]
+  couponReportResets CouponReport[]
+
+  @@map("admin_users")
+}
+
+model ApprovalQueue {
+  id          String    @id @default(uuid())
+  queueType   String    @map("queue_type")
+  referenceId String    @map("reference_id")
+  dealId      String?   @unique @map("deal_id")
+  priority    Int       @default(2)
+  status      String    @default("pending")
+  adminNotes  String?   @map("admin_notes")
+  reviewedBy  String?   @map("reviewed_by")
+  reviewedAt  DateTime? @map("reviewed_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  reviewer AdminUser? @relation(fields: [reviewedBy], references: [id])
+  deal     Deal?      @relation(fields: [dealId], references: [id])
+
+  @@map("approval_queue")
+}
+
+// ==================== MISC DOMAIN ====================
+
+model SavedProduct {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  listingId String   @map("listing_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user    User           @relation(fields: [userId], references: [id])
+  listing ProductListing @relation(fields: [listingId], references: [id])
+
+  @@unique([userId, listingId])
+  @@map("saved_products")
+}
+
+model SearchHistory {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  query        String
+  resultsCount Int?     @map("results_count")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("search_history")
+}
+
+model OtpRequest {
+  id        String   @id @default(uuid())
+  phone     String
+  codeHash  String   @map("code_hash")
+  attempts  Int      @default(0)
+  verified  Boolean  @default(false)
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([phone, createdAt])
+  @@map("otp_requests")
+}
+
+model Coupon {
+  id             String  @id @default(uuid())
+  code           String
+  merchantUrl    String? @map("merchant_url")
+  rawText        String  @map("raw_text")
+  creatorId      String  @map("creator_id")
+  storeId        String? @map("store_id")
+  normalizedHash String  @unique @map("normalized_hash")
+
+  status          String @default("submitted") // see lifecycle enum below
+  aiExtracted     Json?  @map("ai_extracted")
+  confidenceScore Int    @default(0) @map("confidence_score")
+  aiExplanations  Json?  @map("ai_explanations") // string[]
+
+  couponType String    @default("REUSABLE") @map("coupon_type") // REUSABLE | SINGLE_USE
+  redeemedAt DateTime? @map("redeemed_at") // set when a trusted "worked" retires a SINGLE_USE coupon
+
+  expiresAt    DateTime? @map("expires_at")
+  revealCount  Int       @default(0) @map("reveal_count")
+  successCount Int       @default(0) @map("success_count")
+  failCount    Int       @default(0) @map("fail_count")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  creator User           @relation(fields: [creatorId], references: [id])
+  store   Store?         @relation(fields: [storeId], references: [id])
+  reports CouponReport[]
+  reveals CouponReveal[]
+
+  @@index([status, confidenceScore])
+  @@index([creatorId])
+  @@map("coupons")
+}
+
+model CouponReport {
+  id             String    @id @default(uuid())
+  couponId       String    @map("coupon_id")
+  userId         String    @map("user_id")
+  type           String // worked | failed | expired | fake
+  weight         Float     @default(1.0)
+  isActive       Boolean   @default(true) @map("is_active") // flipped false on admin reset — row is never deleted
+  resetByAdminId String?   @map("reset_by_admin_id")
+  resetAt        DateTime? @map("reset_at")
+  conversionId   String?   @map("conversion_id")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  coupon       Coupon     @relation(fields: [couponId], references: [id])
+  user         User       @relation(fields: [userId], references: [id])
+  resetByAdmin AdminUser? @relation(fields: [resetByAdminId], references: [id])
+
+  @@index([couponId, userId, isActive])
+  @@map("coupon_reports")
+}
+
+model CouponReveal {
+  id          String   @id @default(uuid())
+  couponId    String   @map("coupon_id")
+  userId      String   @map("user_id")
+  pointsSpent Int      @default(0) @map("points_spent")
+  escrowState String   @default("released") @map("escrow_state") // held | released | refunded
+  revealedAt  DateTime @default(now()) @map("revealed_at")
+
+  coupon Coupon @relation(fields: [couponId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@map("coupon_reveals")
+}
